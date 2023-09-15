@@ -8,7 +8,9 @@ The project aims to perform a time series analysis of three major GPU  companies
 
 We've obtained historical stock data for Nvidia, AMD, and Intel from [this Kaggle dataset](https://www.kaggle.com/datasets/kapturovalexander/nvidia-amd-intel-asus-msi-share-prices?select=NVIDIA+(1999+-11.07.2023).csv). Our analysis focuses on the common time frame between January 25, 1999, and July 10, 2023, during which we computed both the *Return* and *Log Return* for each day.
 
-![](.\img\modified_dataset.png)
+<div>
+  <img src=".\img\modified_dataset.png" alt="modified dataset" width=100%\>
+<\div>
 
 Here is a visualization of the three time series with their relatives *Log Returns*:
 
