@@ -23,10 +23,13 @@ It's intriguing to observe that there are certain dates or periods, both in the 
 ## The model
 
 To forecast the volatility we followed the **GARCH** (**Generalized Autoregressive Conditional Heteroskedasticity**) model, which defines $\sigma^2_t$ as:
+
 $$
 \sigma^2_t = \omega + \sum\limits_{i=1}^I\alpha_i(y_{t-1}-\mu)^2 + \sum\limits_{i=1}^I\beta_i\sigma^2_{t-1} \quad\text{where }I\text{ is the number of lags}
 $$
+
 This was our setup:
+
 $$
 \begin{aligned}
 \text{likelihood}&\begin{cases}
@@ -41,6 +44,7 @@ y \sim N(\mu,\sigma^{-2})\\
 \end{cases}
 \end{aligned}
 $$
+
 And here it is in R code:
 
 ```R
