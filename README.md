@@ -9,12 +9,14 @@ The project aims to perform a time series analysis of three major GPU  companies
 We've obtained historical stock data for Nvidia, AMD, and Intel from [this Kaggle dataset](https://www.kaggle.com/datasets/kapturovalexander/nvidia-amd-intel-asus-msi-share-prices?select=NVIDIA+(1999+-11.07.2023).csv). Our analysis focuses on the common time frame between January 25, 1999, and July 10, 2023, during which we computed both the *Return* and *Log Return* for each day.
 
 <div>
-  <img src=".\img\modified_dataset.png" alt="modified dataset" width=100%\>
-<\div>
+  <img src=".\img\modified_dataset.png" alt="modified dataset" width=100%/>
+</div>div>
 
 Here is a visualization of the three time series with their relatives *Log Returns*:
 
-![](.\img\time_series_plot.png)
+<div>
+  <img src=".\img\time_series_plot.png" alt="modified dataset" width=100%/>
+</div>div>
 
 It's intriguing to observe that there are certain dates or periods, both in the *Adj.Close* and *LogReturns* features, during which all three time series exhibit similar spike behavior.
 
@@ -65,9 +67,9 @@ model
 ## Forcasting Volatility
 
 <div style="display: flex; flex-direction: row;">
-    <img src=".\img\nvidia_forecasting.png" alt="nvidia forcasting" width="350" />
-    	<img src=".\img\amd_forecasting.png" alt="amd forcasting" width="350" />
-    	<img src=".\img\intel_forecasting.png" alt="intel forcasting" width="350" />
+    <img src=".\img\nvidia_forecasting.png" alt="nvidia forcasting" width="300" />
+    	<img src=".\img\amd_forecasting.png" alt="amd forcasting" width="300" />
+    	<img src=".\img\intel_forecasting.png" alt="intel forcasting" width="300" />
 </div>
 
 From the three plots above, it appears that all three of our GARCH models effectively captured the volatility between January 25, 1999, and July 10, 2023.
@@ -75,8 +77,8 @@ From the three plots above, it appears that all three of our GARCH models effect
 It's also worth noting that both our models for AMD and Intel have demonstrated an unexpected ability to forecast volatility, even for the period we initially excluded from our analysis (1980-1999).
 
 <div style="display: flex; flex-direction: row;">
-    <img src=".\img\amd_old_forecasting.png" alt="AMD old forecast" width="500" />
-    <img src=".\img\intel_old_forecasting.png" alt="Intel old forecast" width="500" />
+    <img src=".\img\amd_old_forecasting.png" alt="AMD old forecast" width="400" />
+    <img src=".\img\intel_old_forecasting.png" alt="Intel old forecast" width="400" />
 </div>
 
 ## The Portfolio Diversification strategies
