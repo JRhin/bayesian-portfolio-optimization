@@ -10,13 +10,13 @@ We've obtained historical stock data for Nvidia, AMD, and Intel from [this Kaggl
 
 <div>
   <img src=".\img\modified_dataset.png" alt="modified dataset" width=100%/>
-</div>div>
+</div>
 
 Here is a visualization of the three time series with their relatives *Log Returns*:
 
 <div>
   <img src=".\img\time_series_plot.png" alt="modified dataset" width=100%/>
-</div>div>
+</div>
 
 It's intriguing to observe that there are certain dates or periods, both in the *Adj.Close* and *LogReturns* features, during which all three time series exhibit similar spike behavior.
 
@@ -77,8 +77,8 @@ From the three plots above, it appears that all three of our GARCH models effect
 It's also worth noting that both our models for AMD and Intel have demonstrated an unexpected ability to forecast volatility, even for the period we initially excluded from our analysis (1980-1999).
 
 <div style="display: flex; flex-direction: row;">
-    <img src=".\img\amd_old_forecasting.png" alt="AMD old forecast" width="400" />
-    <img src=".\img\intel_old_forecasting.png" alt="Intel old forecast" width="400" />
+    <img src=".\img\amd_old_forecasting.png" alt="AMD old forecast" width="450" />
+    <img src=".\img\intel_old_forecasting.png" alt="Intel old forecast" width="450" />
 </div>
 
 ## The Portfolio Diversification strategies
