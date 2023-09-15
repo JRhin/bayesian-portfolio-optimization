@@ -1,0 +1,717 @@
+---
+title: "Time Series Analysis for Portfolio Diversification under the Bayesian Framework"
+subtitle: "Final project for Statistical Methods for Data Science 2"
+author: "Mario Edoardo Pandolfo"
+date: "12/09/2023"
+date-format: "DD MM YYYY"
+title-block-banner: "#862633"
+title-block-banner-color: white
+format: 
+  html:
+    embed-resources: true
+    smooth-scroll: true
+    theme: cosmo
+    fontcolor: black
+    toc: true
+    toc-location: left
+    toc-title: Summary
+    toc-depth: 3
+    css: style.css
+#output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(tibble)
+library(gt)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tseries)
+library(nortsTest)
+library(fitdistrplus)
+library(MCMCvis)
+library(rjags)
+library(R2jags)
+```
+
+```{r load-enviroment}
+load("wspace.RData")
+```
+
+# 1. Introduction
+
+The project aims to perform a time series analysis of three major GPU companies (Nvidia, AMD, Intel), to forecast their volatility using the well known GARCH model and lastly to propose possible strategies of Portfolio Diversification based on the asset precision.
+
+# 2. Studying the processes
+
+## 2.1 The dataset
+
+For the project we're going to use [this Kaggle dataset](https://www.kaggle.com/datasets/kapturovalexander/nvidia-amd-intel-asus-msi-share-prices?select=NVIDIA+%281999+-11.07.2023%29.csv) which contains the historical stock data for the most famous video card manufacturers (Nvidia, AMD, Intel, MSI, ASUS).
+
+We had to drop both Asus and MSI datasets due to errors: being not able to open the Asus dataset and MSI seems to refer to another company ([see more](https://www.kaggle.com/datasets/kapturovalexander/nvidia-amd-intel-asus-msi-share-prices/discussion/416988?select=NVIDIA+%281999+-11.07.2023%29.csv)).
+
+The datasets consist of 7 features:
+
+- **Date**: The day (expressed in the YYYY-MM-DD format) of reference.
+- **Open**: The opening stock price in that day.
+- **High**: The maximum stock price in that day.
+- **Low**: The minimum stock price in that day.
+- **Close**: The closing stock price in that day.
+- **Adj.Close**: The closing stock price after adjustments for all applicable splits and dividend distributions in that day.
+- **Volume**: the number of shares traded in that day.
+
+\newpage
+
+Here a sneak peek:
+
+```{r dataframe, results='asis'}
+head(subset(data.nvidia, select = c(-Returns, -LogReturns) )) %>%gt() %>% tab_options(., table.width = 300) %>%  tab_header(
+    title = md("**Nvidia Stocks**"),
+    subtitle = md("Here the first five rows of the Nvidia Dataset")
+  )
+```
+
+## 2.2 Data Cleaning and Feature Engineering
+
+The datasets reported different periods for each stock:
+
+- **Nvidia**: 1999-2023
+- **AMD**: 1980-2023
+- **Intel**: 1980-2023
+
+For this reason we have taken in consideration only the common period 1999-2023, starting from 1999-01-25 and ending at 2023-07-10.
+
+In terms of features we're mainly interested in *Date* and *Adj.Close* because we want to perform a time series analysis of the volatility of these stocks final price for the given period and not of the actual final price.
+
+To perform this type of analysis we need the *Return* in each day, which is defined as:
+
+$$
+r_t = \frac{\hat{C}_t -\hat{C}_{t-1}}{\hat{C}_{t-1}}
+$$
+Where $t$ refers to the index of a day and $\hat{C}_i$ to the *Adj.Close*.
+
+In the project we had considered the *Log Return* in each day, which is defined as:
+
+$$
+z_t = \log(1+r_t)= \log  \frac{\hat{C}_t}{\hat{C}_{t-1}}
+$$
+
+```{r returns-logreturns}
+curve(log(1+x), -0.9999, 10, ylim=c(-5,5), xlim=c(-2,5), col="red", lwd=2, ylab="y", xlab="x", main="Returns Vs LogReturns")
+abline(a=0, b=1,col="blue", lwd=2)
+abline(v=0)
+abline(h=0)
+legend(3, -2, legend=c("f(x) = x", "f(x) = log(1+x)"),
+       col=c("blue", "red"), lty=1)
+```
+*Log Returns* are usually used for their mathematical proprieties (as described by [Gregory W. Gundersen](https://gregorygundersen.com/blog/2022/02/06/log-returns/)), but in particular we decided to use them for two particular reasons:
+
+- [**Taylor first order approximation**](https://en.wikipedia.org/wiki/Taylor_series#Natural_logarithm): For $x\approx0$ we have that $\log(1+x)\approx x$. This is important because as we'll see later returns are usually distributed around zero.
+- **First derivative implications**: $\frac{d}{dx}\log(1+x)=\frac{1}{1+x}$ which tends to $-\infty$ if $x\to-\infty$ and to $0$ if $x\to +\infty$. This is crucial because it tells us that negative returns will have a bigger volatility respect to positive returns, which encourages a Portfolio Management strategy based on the precision of an asset (inverse of the volatility).
+
+Here another sneak peek to the updated datasets:
+
+```{r new_dataframe, results='asis'}
+head(data.nvidia) %>%gt() %>% tab_options(., table.width = 300) %>%  tab_header(
+    title = md("**Nvidia Stocks with Returns**"),
+    subtitle = md("Here the first five rows of the new Nvidia Dataset")
+  )
+```
+
+**Note**: Both *Returns* and *LogReturns* have been multiplied by 100 to express them in percentages and help the jags solver to fit the GARCH model.
+
+## 2.3 Lets plot and give a closer look!
+
+
+```{r ts-plot}
+adj.ts <- ggplot() +
+              geom_line(data = data.nvidia, aes(x=Date, y=Adj.Close), color="cornflowerblue") +
+              geom_line(data = data.amd, aes(x=Date, y=Adj.Close), color="coral") +
+              geom_line(data = data.intel, aes(x=Date, y=Adj.Close), color="limegreen") +
+              labs(title="Adjusted Close Time Series",
+                   x="Date",
+                   y="Price") +
+              theme_minimal() +
+              theme(plot.title = element_text(hjust = 0.5))
+
+nvidia_return_plot <- ggplot(data.nvidia, aes(x=Date, y=LogReturns, group=1)) +
+                          geom_line(color="cornflowerblue") +
+                          labs(title="Nvidia",
+                               x=NULL,
+                               y="Log Returns") +
+                          theme_minimal()
+                    
+amd_return_plot <- ggplot(data.amd, aes(x=Date, y=LogReturns, group=1)) +
+                       geom_line(color="coral") +
+                       labs(title="AMD",
+                            x=NULL,
+                            y="Log Returns") +
+                       theme_minimal()
+
+intel_return_plot <- ggplot(data.intel, aes(x=Date, y=LogReturns, group=1)) +
+                         geom_line(color="limegreen") +
+                         labs(title="Intel",
+                              x="Date",
+                              y="Log Returns") +
+                         theme_minimal()
+
+p <- ggarrange(nvidia_return_plot, amd_return_plot, intel_return_plot,
+               ncol=1, nrow=3)
+
+p <- annotate_figure(p, top="Log Returns Time Series")
+
+ggarrange(adj.ts, p, ncol=2, nrow=1)
+```
+
+From the plot above we can notice that the three stocks have similar jumps in the *Adj.Close* time series which are more pronounced in the *Log Returns* ones: the stocks share the high variability and low variability periods.
+
+It worth noticing that Nvidia seems to behave differently at the start of the series maybe due to the fact that is the only company that sells only GPUs (AMD and Intel are mainly CPUs sellers), which is a market that have grown in popularity only in recent years with the advent of BitCoins and Deep Learning.
+
+Now we can proceed with a decomposition study in which we decompose each time series in *Observed* (the actual observed level), *Trend* (the overall trend), *Seasonal* (the repeating short-tern cycle) and *Random* (noise) components.
+
+**Note**: We're considering a *multiplicative model* which defines the time series as a multiplicative combination of the previous components:
+
+$$
+y(t) = O\cdot T\cdot S\cdot R
+$$
+
+```{r decomposition-plots}
+decomp.plot <- function(data, color, type){
+  price.ts <- ts(data$Adj.Close, frequency = 365)
+  decomposed.ts <- decompose(price.ts, type="multiplicative")
+  
+  ob <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$x), decomposed.ts$x), color=color) +
+          xlab("Time") +
+          ylab("observed")
+  trend <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$trend), decomposed.ts$trend), color=color) +
+          xlab("Time") +
+          ylab("trend")
+  seas <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$seasonal), decomposed.ts$seasonal), color=color) +
+          xlab("Time") +
+          ylab("seasonal")
+  ran <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$random), decomposed.ts$random), color=color) +
+          xlab("Time") +
+          ylab("random")
+  
+  
+  a <- annotate_figure(ggarrange(ob, trend, seas, ran, ncol=1, nrow=4), top="Decomposition of Adjusted Close")
+  
+  
+  price.ts <- ts(data$LogReturns, frequency = 365)
+  decomposed.ts <- decompose(price.ts, type="multiplicative")
+  
+  ob <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$x), decomposed.ts$x), color=color) +
+          xlab("Time") +
+          ylab("observed")
+  trend <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$trend), decomposed.ts$trend), color=color) +
+          xlab("Time") +
+          ylab("trend")
+  seas <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$seasonal), decomposed.ts$seasonal), color=color) +
+          xlab("Time") +
+          ylab("seasonal")
+  ran <- ggplot() + 
+          geom_line(aes(1:length(decomposed.ts$random), decomposed.ts$random), color=color) +
+          xlab("Time") +
+          ylab("random")
+  
+  
+  b <- annotate_figure(ggarrange(ob, trend, seas, ran, ncol=1, nrow=4), top="Decomposition of Log Returns")
+  
+  annotate_figure(ggarrange(a, b, ncol=2, nrow=1), top=text_grob(paste("Decomposition for", type), size=16))
+}
+
+decomp.plot(data.nvidia, "cornflowerblue", "Nvidia")
+decomp.plot(data.amd, "coral", "AMD")
+decomp.plot(data.intel, "limegreen", "Intel")
+```
+
+From the *Adj.Close* decomposition, in the trend section, we can notice that for each company there is an overall positive trend (mostly in the last years), even if it is not neat... examples are the depression for Nvidia near 5000 or the last decreasing sections for both AMD and Intel.
+
+From the *Log Returns* decomposition we can notice:
+
+- The observed values seems to be all around zero (see sections 2.3 and 2.4.2).
+- Variance seems not to be constant over time (see section 2.4.1).
+- There is no trend.
+- There very low if not seasonality.
+
+The plots above highlights why we're more interested in forecasting the volatility using the *Log Returns* and not using directly the price given by the *Adj.Close* feature as if we look at the random section we can notice that in the first case we have little noise, while in the second one noise is more pronounced.
+
+## 2.3 To be or not to be Normal
+
+Noticing that *Log Returns* seems to be centered all around zero, for simplicity we could consider them to be following a Gaussian distribution. By fitting a Normal distribution using `fitdist` we can check how good or bad our guess fits the data.
+
+\newpage
+
+Here the results for Nvidia:
+
+```{r nvidia-normal}
+fitted.nvidia <- fitdist(data.nvidia$LogReturns, "norm")
+plot(fitted.nvidia)
+```
+\newpage
+
+Here the results for AMD:
+
+```{r amd-normal}
+fitted.amd <- fitdist(data.amd$LogReturns, "norm")
+plot(fitted.amd)
+```
+
+\newpage
+
+Here the results for Intel:
+
+```{r intel-normal}
+fitted.intel <- fitdist(data.intel$LogReturns, "norm")
+plot(fitted.intel)
+```
+
+From the qq-plots above it seems that the *LogReturns* distributions have heavy tails, which means that they don't follow a Normal distribution.
+
+We can further investigate this by performing a **Kolmogorov–Smirnov test**:
+
+```{r Kolmogorov-Smirnov, results='markup'}
+ks.test(data.nvidia$LogReturns, "pnorm", mean = mean(data.nvidia$LogReturns),sd = sd(data.nvidia$Returns))
+
+ks.test(data.amd$LogReturns, "pnorm", mean = mean(data.amd$LogReturns),sd = sd(data.amd$Returns))
+
+ks.test(data.intel$LogReturns, "pnorm", mean = mean(data.intel$LogReturns),sd = sd(data.intel$Returns))
+```
+
+Even from the Kolmogorov–Smirnov test it seems that our data doesn't follow a Normal distribution.
+
+Although all above is true we can notice that these tails are composed mainly by outliers so will stick to our simple "Normal" guess.
+
+\newpage
+
+## 2.4 Heteroscedasticity and Stationarity
+
+In this section we're going to investigate the heteroscedasticity and the stationarity of each time series, both essential assumption of the GARCH model which we'll use to forecast these signals.
+
+### 2.4.1 Lagrange Multiplier Test
+
+Due to the fact that we want to use a GARCH model we have to formally check for the *autoregressive conditional heteroscedasticity* (ARCH) of a time series, which can be done by performing the **Lagrange Multiplier test**.
+
+The test for random effects in a linear model is based on pooled OLS residuals, while estimation of the alternative model involves generalized least squares either based on a two step procedure or maximum likelihood.
+
+Overall it can be interpreted as a **Wald test** of the distance from zero of the first  derivative vector of the log likelihood function (the score vector) of the unrestricted model evaluated at the restricted maximum likelihood estimates.
+
+```{r arch-effect, results='markup'}
+Lm.test(data.nvidia$LogReturns)
+Lm.test(data.amd$LogReturns)
+Lm.test(data.intel$LogReturns)
+```
+
+By the tests results we can conclude that all three time series are heteroscedastic, which means that the series volatility is not time invariant (which confirm our hypothesis).
+
+## 2.4.2 Augmented Dickey-Fuller Test
+
+The second essential condition to use GARCH is the *stationarity* of a time series, which can be assessed by performing the  **Augmented Dickey-Fuller Test**.
+
+Generally the Dickey–Fuller test tests the null hypothesis that a unit root is present in a time series sample. The alternative hypothesis is different depending on which version of the test is used, but is usually stationarity or trend-stationarity.
+
+The augmented version of the Dickey–Fuller test is for a larger and more complicated set of time series models.
+
+The statistic used in the test is a negative number. The more negative it is, the stronger the rejection of the hypothesis that there is a unit root at some level of confidence.
+
+```{r stationarity, results='markup'}
+adf.test(data.nvidia$LogReturns)
+adf.test(data.amd$LogReturns)
+adf.test(data.intel$LogReturns)
+```
+
+By the tests results we can conclude that all three time series are stationary, which means that we have proven all the needed assumptions for GARCH.
+
+# 3. Forecasting
+
+From the tests performed at *2.4* we know that *GARCH* is indeed a good candidate to model these three signals.
+
+## 3.1 GARCH model
+
+The **GARCH** (**Generalized Autoregressive Conditional Heteroskedasticity**) model is a statistical model used in finance and econometrics to describe and predict the volatility of time series data, such as stock returns or financial market indices. It extends the **ARCH** (**Autoregressive Conditional Heteroskedasticity**) model by allowing for a more flexible and dynamic representation of volatility.
+
+The main difference between the GARCH and ARCH models is that the first one incorporates past squared forecast errors (volatility) in addition to past squared observations, making it more adept at capturing time-varying volatility patterns. While the second model only relies on past squared observations to model volatility, the GARCH model accounts for both the lagged volatility and the lagged squared forecast errors, making it more suitable for capturing changing and evolving volatility over time.
+
+In mathematical terms, ARCH defines $\sigma^2_t$ as:
+
+$$
+\sigma^2_t = \omega + \sum\limits_{i=1}^I\alpha_i(y_{t-1}-\mu)^2 \quad\text{where }I\text{ is the number of lags}
+$$
+While GARCH defines it as:
+
+$$
+\sigma^2_t = \omega + \sum\limits_{i=1}^I\alpha_i(y_{t-1}-\mu)^2 + \sum\limits_{i=1}^I\beta_i\sigma^2_{t-1} \quad\text{where }I\text{ is the number of lags}
+$$
+
+With "lags" we refers to the number of past time periods that are considered when modeling a specific component or property of the time series data (in these cases $\sigma^2$). They capture how past values of the time series, especially past volatility or squared forecast errors, affect the current value of volatility. By considering these lags, the models can account for the time-varying and autocorrelated nature of volatility in the data.
+
+## 3.2 The setup
+
+Inspired by these [slides](https://andrewcparnell.github.io/TSDA/slides/day_4/class_2_svm.pdf) we decide to implement the the following setup:
+
+$$
+\begin{aligned}
+\text{likelihood}&\begin{cases}
+y \sim N(\mu,\sigma^{-2})\\
+\end{cases}\\
+\\
+\text{priors}&\begin{cases}
+\mu \sim N(0,100^{-2})\\
+\omega \sim U(0,10)\\
+\alpha \sim U(0,1)\\
+\beta \sim U(0,1)
+\end{cases}
+\end{aligned}
+$$
+
+Here it is in R code:
+
+```{r garch, echo=TRUE}
+garch_model_code <- "
+model
+{
+  # Likelihood
+  for (t in 1:N) {
+    y[t] ~ dnorm(mu, 1/pow(sigma[t], 2))
+  }
+  sigma[1] ~ dunif(0,10)
+  for(t in 2:N) {
+    sigma[t] <- sqrt(omega + alpha * pow(y[t-1] - mu, 2) + beta * pow(sigma[t-1], 2))
+  }
+  # Priors
+  mu ~ dnorm(0, 0.01)
+  omega ~ dunif(0, 10)
+  alpha ~ dunif(0, 1)
+  beta ~ dunif(0, 1)
+}
+"
+
+# Choose the parameters to watch
+garch_model_parameters <- c("omega", "alpha", "beta", "mu", "sigma")
+
+```
+
+## 3.3 The right amount of lags
+
+A way to determine the number of lags to consider is to inspect the **partial autocorrelation plots** (**PACF**) looking for lags with PACF values that are significantly different from zero (above or below a reference line). These significant values suggest that there is a strong relationship between the current observation and that specific lag.
+
+```{r acf-plots}
+pacf(data.nvidia$LogReturns, main="Partial ACF Nvidia")
+pacf(data.amd$LogReturns, main="Partial ACF AMD")
+pacf(data.intel$LogReturns, main="Partial ACF Intel")
+```
+
+From the plots above it seems that each time series has its own right lags number:
+
+- Nvidia: 8 lags so a GARCH(8, 8)
+- AMD: 7 lags so a GARCH(7, 7)
+- Intel: 1 lag so a  GARCH(1, 1)
+
+**Note**: Unfortunately due to the large size of the dataset and to the computational power of my personal computer it was not possible to go beyond the GARCH(1,1) implementation.
+
+## 3.3 Traces and Densities
+
+### Nvidia Traces and Densities
+
+- **Traces**: Bouncy, no trends, centered near a value.
+- **Densities**: $\alpha$ and $\beta$ seems to need or more iterations to converge more or maybe two lags are not enough.
+
+```{r nvidia-trace}
+MCMCtrace(garch_model.nvidia, 
+          params = c('mu', 'omega', 'alpha', 'beta'), 
+          ISB = FALSE,
+          pdf=FALSE,
+          Rhat=TRUE,
+          ind=TRUE,
+          exact=TRUE,
+          n.eff = TRUE,
+          type = "both")
+```
+
+### AMD Traces and Densities
+
+- **Traces**: the model converged really fast (around 250/300 iterations).
+- **Densities**: All the parameters densities, except for $\mu$, are really tight around the expected value.
+
+```{r amd-trace}
+MCMCtrace(garch_model.amd, 
+          params = c('mu', 'omega', 'alpha', 'beta'), 
+          ISB = FALSE,
+          pdf=FALSE,
+          Rhat=TRUE,
+          ind=TRUE,
+          exact=TRUE,
+          n.eff = TRUE,
+          type = "both")
+```
+
+### Intel Traces and Densities 
+
+- **Traces**: Bouncy, no trends, centered near a value.
+- **Densities**: All the parameters densities are wide but consistent between the three chains.
+
+```{r intel-trace}
+MCMCtrace(garch_model.intel, 
+          params = c('mu', 'omega', 'alpha', 'beta'), 
+          ISB = FALSE,
+          pdf=FALSE,
+          Rhat=TRUE,
+          ind=TRUE,
+          exact=TRUE,
+          n.eff = TRUE,
+          type = "both")
+```
+
+\newpage
+
+## 3.4 Parameters Tables
+
+```{r summary}
+m1 <- MCMCsummary(garch_model.nvidia,
+                    params = c('omega', 'alpha', 'beta', 'mu'),
+                    HPD=T,
+                    hpd_prob=0.95,
+                    round=8)
+
+m2 <- MCMCsummary(garch_model.amd,
+                    params = c('omega', 'alpha', 'beta', 'mu'),
+                    HPD=T,
+                    hpd_prob=0.95,
+                    round=8)
+
+m3 <- MCMCsummary(garch_model.intel,
+                  params = c('omega', 'alpha', 'beta', 'mu'),
+                  HPD=T,
+                  hpd_prob=0.95,
+                  round=8) 
+
+rownames_to_column(m1, var="parameter") %>%gt() %>% tab_options(., table.width = 300) %>%  tab_header(title = md("**Nvidia Parameters**"))
+rownames_to_column(m2, var="parameter") %>%gt() %>% tab_options(., table.width = 300) %>%  tab_header(title = md("**AMD Parameters**"))
+rownames_to_column(m3, var="parameter") %>%gt() %>% tab_options(., table.width = 300) %>%  tab_header(title = md("**Intel Parameters**"))
+```
+
+## 3.5 Volatility
+
+Looking at the following plots it seems that all our three models are able to grasp perfectly the volatility in the period between 1999-2023.
+
+```{r volatility-forecast}
+plot(data.nvidia$LogReturns, type="l", ylab="Log Returns", main="Nvidia Volatility", col="cornflowerblue")
+lines(forecast(garch_model.nvidia, data.nvidia$LogReturns)^2, type="l", col="red")
+legend(4000, -20, c("Time Series", "Volatility"), col=c("cornflowerblue", "red"), lty=1)
+
+plot(data.amd$LogReturns, type="l", ylab="Log Returns", main="AMD Volatility", col="coral")
+lines(forecast(garch_model.amd, data.amd$LogReturns)^2, type="l", col="red")
+legend(4000, -20, c("Time Series", "Volatility"), col=c("coral", "red"), lty=1)
+
+plot(data.intel$LogReturns, type="l", ylab="Log Returns", main="Intel Volatility", col="limegreen")
+lines(forecast(garch_model.intel, data.intel$LogReturns)^2, type="l", col="red")
+legend(4000, -10, c("Time Series", "Volatility"), col=c("limegreen", "red"), lty=1)
+```
+
+### What about the past?
+
+Surprisingly both our models for AMD and Intel are able to forecast the volatility of the period we had discarded at the beginning of our analysis (1980-1999).
+
+```{r previous-volatility}
+plot(previous.amd$LogReturns, type="l", ylab="Log Returns", main="AMD Volatility from 1980 to 1999", col="coral")
+lines(forecast(garch_model.amd, previous.amd$LogReturns)^2, type="l", col="red")
+legend(0, -20, c("Time Series", "Volatility"), col=c("coral", "red"), lty=1)
+
+plot(previous.intel$LogReturns, type="l", ylab="Log Returns", main="Intel Volatility from 1980 to 1999", col="limegreen")
+lines(forecast(garch_model.intel, previous.intel$LogReturns)^2, type="l", col="red")
+legend(0, -10, c("Time Series", "Volatility"), col=c("limegreen", "red"), lty=1)
+```
+
+
+# 4. Portfolio Diversification
+
+In this section we're going to define, implement and evaluate our models.
+
+We obtained the most recent two months of data for each company from [Yahoo Finance](https://finance.yahoo.com/), spanning from July 10, 2023, to September 8, 2023. This data begins from the last day of our training set and will serve as the basis for evaluating our models. We will assess our portfolios by comparing their overall return and the [Sharpe ratio](https://en.wikipedia.org/wiki/Sharpe_ratio).
+
+**Note**: In our results we have used a Sharpe Ratio with risk-free equals to 0.
+
+
+## 4.1 The Baseline: The Blind All-In
+
+For our baseline we decided to implement a very simple diversification strategy: the weights for each asset are decided at random (Blind) and we buy for all our unitary starting budget (All-In).
+
+Because our baseline is pure randomness it's better to perform a simulation to get a better estimate of the expected return.
+
+Here are the results given a simulation size of 100000:
+
+```{r baseline}
+create_random_weigths <- function(n){
+  x <- runif(n, 0, 1)
+  x <- x/sum(x)
+  return(x)
+}
+
+all_returns <- lead(cbind(nvidia$Returns, amd$Returns, intel$Returns))[0:43,]
+
+set.seed(1234)
+M <- 100000
+simulated <- rep(NA, M)
+sharpe_ratio <- rep(NA, M)
+for(m in 1:M){
+  random_weigths <- replicate(length(forecast.nvidia)-1, create_random_weigths(3), simplify=TRUE)
+  returns_at_random <- colSums(t(all_returns) * random_weigths)
+  simulated[m] <- sum(returns_at_random)
+  sharpe_ratio[m] <- mean(returns_at_random)/sd(returns_at_random)
+}
+
+returns.BAI <- mean(simulated)
+sharperatio.BAI <- mean(sharpe_ratio)
+
+results.UD <- data.frame(returns.BAI, sharperatio.BAI)
+
+c(Return=returns.BAI, LowerBound=returns.BAI-2*sd(simulated)/sqrt(length(simulated)), UpperBound=returns.BAI+2*sd(simulated)/sqrt(length(simulated)))
+c(SharpeRatio=sharperatio.BAI, LowerBound=sharperatio.BAI-2*sd(sharpe_ratio)/sqrt(length(sharpe_ratio)), UpperBound=sharperatio.BAI+2*sd(sharpe_ratio)/sqrt(length(sharpe_ratio)))
+```
+Here there is a summary:
+
+```{r results-BAI}
+results.BAI <- data.frame(returns.BAI, sharperatio.BAI, (returns.BAI/returns.BAI-1)*100, (sharperatio.BAI/sharperatio.BAI-1)*100)
+colnames(results.BAI) <- c('Return','Sharpe Ratio', 'Return Increase from Baseline (%)', 'Sharpe Ratio Increase from Baseline (%)')
+
+results.BAI %>%gt() %>%  tab_header(
+    title = md("**Blind All-In Results**")
+  )
+```
+
+It seems that even adopting a random strategy allows us to earn positive returns. Can we do better?
+
+## 4.2 Univariate diagonal (UD) portfolio
+
+The idea behind this Portfolio Diversification strategy was taken from a the paper ["Portfolio construction by volatility forecasts:
+Does the covariance structure matter?"](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=798247) (Momtchil Pojarliev and Wolfgang Polasek 2002), in which there were presented three possible strategies.
+
+We followed the first strategy not because it was the most optimal one, but because it was more in line with our GARCH implementation based on precision.
+
+The strategy is called **Univariate diagonal (UD) portfolio** and it consists in building a diagonal matrix $N\times N$ (where $N$ is the number of assets) in which each element is given by the share of an asset precision over the sum of all precisions (inverse of the variance):
+
+$$
+w_{t,i} = \frac{\sigma^{-2}_{t+1,\ i}}{\sum\limits^N_{j=1}\sigma^{-2}_{t+1,\ j}} \quad \text{with}\quad i:=\{1,\dots,N\}
+$$
+
+So if we define $W_t$ as the weights matrix at time $t$, we have that:
+
+$$
+W_t := \begin{bmatrix}
+w_{t,1} & \dots & 0\\
+\vdots & \ddots & \vdots\\
+0 & \dots & w_{t,N}
+\end{bmatrix}
+$$
+
+To get the needed precision for each stock we can use the above GARCH models and forecast in each day the $\sigma^2$ of the following day and then calculate the weights.
+
+```{r forecast}
+forecast <- function(model,
+                     y){
+  alpha <- model$BUGSoutput$mean$alpha
+  beta <- model$BUGSoutput$mean$beta
+  omega <- model$BUGSoutput$mean$omega
+  mu <- model$BUGSoutput$mean$mu
+  
+  N <- length(y)
+  sigma <- rep(1,N)
+  for(t in 2:N) {
+    sigma[t] <- sqrt(omega + alpha * (y[t-1] - mu)^2 + beta * sigma[t-1]^2)
+  }
+  
+  return(sigma)
+}
+
+forecast.nvidia <- forecast(garch_model.nvidia, nvidia$LogReturns)
+forecast.amd <- forecast(garch_model.amd, amd$LogReturns)
+forecast.intel <- forecast(garch_model.intel, intel$LogReturns)
+```
+
+```{r weights}
+nvidia.weights <- (1/forecast.nvidia^2) / (1/forecast.nvidia^2 + 1/forecast.amd^2 + 1/forecast.intel^2)
+amd.weights <- (1/forecast.amd^2) / (1/forecast.nvidia^2 + 1/forecast.amd^2 + 1/forecast.intel^2)
+intel.weights <- (1/forecast.intel^2) / (1/forecast.nvidia^2 + 1/forecast.amd^2 + 1/forecast.intel^2)
+
+all_weights <- rbind(nvidia.weights[2:44], amd.weights[2:44], intel.weights[2:44])
+```
+
+Here are the results:
+
+```{r UD_return}
+my_returns <- colSums(t(all_returns) * all_weights)
+returns.UD <- sum(my_returns)
+sharperatio.UD <- mean(my_returns)/sd(my_returns)
+
+results.UD <- data.frame(returns.UD, sharperatio.UD, round((returns.UD/returns.BAI-1)*100, 2), round((sharperatio.UD/sharperatio.BAI-1)*100, 2))
+colnames(results.UD) <- c('Return','Sharpe Ratio', 'Return Increase from Baseline (%)', 'Sharpe Ratio Increase from Baseline (%)')
+
+results.UD %>%gt() %>%  tab_header(
+    title = md("**UD Results**")
+  )
+```
+
+## 4.3 UD Portfolio with optimized stock trading
+
+This is a personal adjustment to the **Univariate diagonal portfolio strategy** in which we don't always buy all stocks each day, but we implement a decision strategy for which we buy a stock only if its $p_t$ (the forecasted precision) is above a certain threshold $\tilde{p}$.
+
+If $p_t < \tilde{p}$ then we invest all our money in the remaining stocks (the ones which forcasted precision is above $\tilde{p}$) weighting them following the UD diversification strategy.
+
+```{r}
+nvidia.precision <- (1/forecast.nvidia^2)
+amd.precision <- (1/forecast.amd^2)
+intel.precision <- (1/forecast.intel^2)
+
+nvidia.precision[nvidia.precision < 0.2] <- 0
+amd.precision[amd.precision < 0.2] <- 0
+intel.precision[intel.precision < 0.2] <- 0
+
+nvidia.weights <- nvidia.precision / (nvidia.precision + amd.precision + intel.precision)
+amd.weights <- amd.precision / (nvidia.precision + amd.precision + intel.precision)
+intel.weights <- intel.precision / (nvidia.precision + amd.precision + intel.precision)
+
+all_weights <- rbind(nvidia.weights[2:44], amd.weights[2:44], intel.weights[2:44])
+all_weights[is.nan(all_weights)] <- 0
+```
+
+Here are the results:
+
+```{r OUD_return}
+my_returns <- colSums(t(all_returns) * all_weights)
+returns.OUD <- sum(my_returns)
+sharperatio.OUD <- mean(my_returns)/sd(my_returns)
+
+results.OUD <- data.frame(returns.OUD, sharperatio.OUD, round((returns.OUD/returns.BAI-1)*100, 2), round((sharperatio.OUD/sharperatio.BAI-1)*100, 2))
+colnames(results.OUD) <- c('Return','Sharpe Ratio', 'Return Increase from Baseline (%)', 'Sharpe Ratio Increase from Baseline (%)')
+
+results.OUD %>% gt() %>%  tab_header(
+    title = md("**Optimized UD Results**")
+  )
+```
+
+**Note**: To get these results we have set $\tilde{p}=0.2$ but this parameter should be tuned.
+
+# 5. Conclusions
+
+In conclusion we can assert that even tho we had done some important simplifications (considering the sampling distribution to be a Normal distribution, setting the number of lags equal to 1 for all the GARCH models), the models were not only able to grasp perfectly the volatility from the training dataset, but also to forecast it in the past (AMD and Intel for 1980-1999) and in the future (10-07-2023 to 08-09-2023).
+
+We were also able to use this last information to define two Portfolio Diversification strategies, with which we manage to increase the expected return of our baseline by 23.08% in the first case and by 83.59% in the second one.
+
+
+```{r conclusions}
+rbind(cbind(Strategy="Blind All-In", results.BAI), cbind(Strategy="UD", results.UD), cbind(Strategy="Optimized UD", results.OUD)) %>% gt() %>%  tab_header(
+    title = md("**Final Results**")
+  )
+```
